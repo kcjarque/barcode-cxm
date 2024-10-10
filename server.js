@@ -6,6 +6,7 @@ const fs = require('fs');
 const { jsPDF } = require('jspdf');  // Import jsPDF for PDF generation
 const bwipjs = require('bwip-js');   // Import bwip-js for generating barcodes
 const PDFDocument = require('pdf-lib').PDFDocument; // For reading and embedding the uploaded PDF
+const { MongoClient } = require('mongodb'); // Import MongoDB Client
 
 let contentCounter = 1;  // Start content counter at 1 to generate XXXXX numbers
 
@@ -14,6 +15,33 @@ const port = 3000;
 
 app.use(cors());
 app.use(fileUpload());  // Enable file upload middleware
+
+// MongoDB connection URI (replace with your own MongoDB URI and URL-encoded username/password)
+const uri = "mongodb+srv://kyle-user:2tNgwToQfrU7p9AR@cluster0.jwpbm.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+
+
+// MongoDB client
+let db;
+
+// Connect to MongoDB (no deprecated options)
+MongoClient.connect(uri)
+  .then(client => {
+    console.log('Connected to Database');
+    db = client.db('barcode-pdf-db'); // Your database name
+  })
+  .catch(error => console.error('MongoDB Connection Error:', error));
+
+// Function to save barcode data to the MongoDB database
+async function saveBarcodeData(contentId, pdfFilePath) {
+  const collection = db.collection('barcodes'); // Your collection name
+  const data = {
+    contentId: contentId,
+    filePath: pdfFilePath,
+    timestamp: new Date()
+  };
+  await collection.insertOne(data);
+  console.log('Barcode data saved:', data);
+}
 
 // Serve the uploaded files statically
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -55,6 +83,9 @@ app.post('/upload', (req, res) => {
     try {
       const generatedPdfPath = await generatePDFWithContentAndBarcode(uploadPath);
       console.log(`Success: PDF generated successfully: ${generatedPdfPath}`);
+
+      // Save barcode data to MongoDB
+      await saveBarcodeData(`CXM-${contentCounter - 1}`, generatedPdfPath);
 
       // Send a confirmation message to the client with the download link
       res.json({

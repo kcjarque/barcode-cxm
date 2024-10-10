@@ -17,6 +17,7 @@
     "express-fileupload": "^1.5.1",
     "fileupload": "^1.0.0",
     "jspdf": "^2.5.2",
+    "mongodb": "^6.9.0",
     "pdf-lib": "^1.17.1"
   }
 }
