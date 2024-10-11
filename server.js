@@ -11,19 +11,19 @@ const { MongoClient } = require('mongodb'); // Import MongoDB Client
 let contentCounter = 1;  // Start content counter at 1 to generate XXXXX numbers
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;  // Use Heroku's dynamic port or 3000 locally
 
 app.use(cors());
 app.use(fileUpload());  // Enable file upload middleware
 
-// Correct MongoDB connection URI (Remove the duplicate declaration)
+// MongoDB connection URI (Make sure this is correctly formatted and credentials are correct)
 const uri = "mongodb+srv://kyle-user:2tNgwToQfrU7p9AR@cluster0.jwpbm.mongodb.net/?retryWrites=true&w=majority";
 
 // MongoDB client and database instance
 let db;
 
 // Connect to MongoDB
-MongoClient.connect(uri)
+MongoClient.connect(uri, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(client => {
     console.log('Connected to Database');
     db = client.db('barcode-pdf-db'); // Your database name
