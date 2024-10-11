@@ -16,55 +16,63 @@ const port = 3000;
 app.use(cors());
 app.use(fileUpload());  // Enable file upload middleware
 
-// MongoDB connection URI (replace with your own MongoDB URI and URL-encoded username/password)
-const uri = "mongodb+srv://kyle-user:2tNgwToQfrU7p9AR@cluster0.jwpbm.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+// Correct MongoDB connection URI (Remove the duplicate declaration)
+const uri = "mongodb+srv://kyle-user:2tNgwToQfrU7p9AR@cluster0.jwpbm.mongodb.net/?retryWrites=true&w=majority";
 
-
-// MongoDB client
+// MongoDB client and database instance
 let db;
 
-// Connect to MongoDB (no deprecated options)
+// Connect to MongoDB
 MongoClient.connect(uri)
   .then(client => {
     console.log('Connected to Database');
     db = client.db('barcode-pdf-db'); // Your database name
-  })
-  .catch(error => console.error('MongoDB Connection Error:', error));
 
-// Function to save barcode data to the MongoDB database
+    // Start the server after MongoDB connection
+    app.listen(port, () => {
+      console.log(`Server running at http://localhost:${port}`);
+    });
+  })
+  .catch(error => {
+    console.error('MongoDB Connection Error:', error);
+    process.exit(1); // Exit process if connection fails
+  });
+
+// Function to save barcode data to MongoDB
 async function saveBarcodeData(contentId, pdfFilePath) {
-  const collection = db.collection('barcodes'); // Your collection name
+  if (!db) {
+    throw new Error('Database not initialized');
+  }
+
+  const collection = db.collection('barcodes');
   const data = {
     contentId: contentId,
     filePath: pdfFilePath,
     timestamp: new Date()
   };
+
   await collection.insertOne(data);
   console.log('Barcode data saved:', data);
 }
 
-// Serve the uploaded files statically
+// Serve uploaded files statically
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// POST route for handling file uploads with validation and PDF generation
+// POST route to handle file uploads, validation, and PDF generation
 app.post('/upload', (req, res) => {
   if (!req.files || Object.keys(req.files).length === 0) {
-    console.log("No files were uploaded.");
     return res.status(400).send('No files were uploaded.');
   }
 
   const pdfFile = req.files.pdfFile;
 
-  // ** File type validation: Only allow PDF files **
+  // Validate file type and size
   if (pdfFile.mimetype !== 'application/pdf') {
-    console.log("Invalid file type. Only PDF files are allowed.");
     return res.status(400).send('Only PDF files are allowed.');
   }
 
-  // ** File size validation: Maximum file size of 5MB **
-  const maxSize = 5 * 1024 * 1024; // 5MB in bytes
+  const maxSize = 5 * 1024 * 1024; // 5MB limit
   if (pdfFile.size > maxSize) {
-    console.log("File size exceeds the 5MB limit.");
     return res.status(400).send('File size exceeds the 5MB limit.');
   }
 
@@ -73,136 +81,96 @@ app.post('/upload', (req, res) => {
   // Move the file to the uploads directory
   pdfFile.mv(uploadPath, async (err) => {
     if (err) {
-      console.error("Error moving the file:", err);
       return res.status(500).send('Error moving the file.');
     }
 
-    console.log(`Success: File uploaded successfully: ${pdfFile.name}`);
-
-    // Generate a PDF with content and barcode after uploading the file
     try {
       const generatedPdfPath = await generatePDFWithContentAndBarcode(uploadPath);
-      console.log(`Success: PDF generated successfully: ${generatedPdfPath}`);
+      console.log(`PDF generated successfully: ${generatedPdfPath}`);
 
       // Save barcode data to MongoDB
       await saveBarcodeData(`CXM-${contentCounter - 1}`, generatedPdfPath);
 
-      // Send a confirmation message to the client with the download link
+      // Send the download link to the client
       res.json({
         message: 'File uploaded and PDF generated successfully',
         downloadUrl: `/uploads/${path.basename(generatedPdfPath)}`
       });
-    } catch (error) {
-      console.error("Error generating PDF:", error.message);
-      res.status(500).send('Error generating PDF: ' + error.message);
-    }
 
-    // Remove the raw PDF file after processing
-    fs.unlink(uploadPath, (err) => {
-      if (err) {
-        console.error("Error deleting the raw PDF file:", err);
-      } else {
-        console.log(`Raw PDF file deleted: ${uploadPath}`);
-      }
-    });
+      // Remove the raw PDF after processing
+      fs.unlink(uploadPath, (unlinkErr) => {
+        if (unlinkErr) {
+          console.error('Error deleting the raw PDF file:', unlinkErr);
+        }
+      });
+    } catch (error) {
+      console.error('Error generating PDF:', error.message);
+      res.status(500).send('Error generating PDF.');
+    }
   });
 });
 
-// Function to generate the PDF with barcode and content overlay
+// Function to generate PDF with barcode and content overlay
 async function generatePDFWithContentAndBarcode(uploadedPdfPath) {
-  // Load the uploaded PDF using pdf-lib
   const uploadedPdfBytes = fs.readFileSync(uploadedPdfPath);
   const uploadedPdfDoc = await PDFDocument.load(uploadedPdfBytes);
-  
-  // Create a new PDFDocument using pdf-lib to modify the uploaded PDF
+
   const newPdfDoc = await PDFDocument.create();
-
-  const barcodeList = [];  // To store barcode names for the summary table
-
-  // Copy all the pages from the uploaded PDF into the new PDF
   const uploadedPages = await newPdfDoc.copyPages(uploadedPdfDoc, uploadedPdfDoc.getPageIndices());
 
-  // Loop through each page and overlay a unique barcode and date
+  const barcodeList = [];
+
   for (let i = 0; i < uploadedPages.length; i++) {
     const page = uploadedPages[i];
-    const newPage = newPdfDoc.addPage(page);  // Add the original page to the new PDF
+    const newPage = newPdfDoc.addPage(page);
 
-    // Generate a unique barcode code for each page: CXM-MMDDYY-XXXXX
+    // Generate unique barcode: CXM-MMDDYY-XXXXX
     const today = new Date();
     const dateCode = `${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}${String(today.getFullYear()).slice(-2)}`;
     const contentId = `CXM-${dateCode}-${String(contentCounter).padStart(5, '0')}`;
-    contentCounter++;  // Increment the content number
+    contentCounter++;
 
-    // Generate the barcode
     const barcodeBuffer = await generateBarcode(contentId);
-    const barcodeImage = await newPdfDoc.embedPng(barcodeBuffer); // Embed the barcode image
+    const barcodeImage = await newPdfDoc.embedPng(barcodeBuffer);
 
-    // Draw the barcode and barcode code on the upper left of the page
-    newPage.drawImage(barcodeImage, {
-      x: 20,  // Align to the upper left
-      y: newPage.getHeight() - 80,  // Top of the page
-      width: 100,
-      height: 50,
-    });
+    // Draw the barcode and content info on the new page
+    newPage.drawImage(barcodeImage, { x: 20, y: newPage.getHeight() - 80, width: 100, height: 50 });
+    newPage.drawText(`Barcode: ${contentId}`, { x: 20, y: newPage.getHeight() - 90, size: 12 });
+    newPage.drawText(`Date: ${today.toLocaleDateString('en-US')}`, { x: 20, y: newPage.getHeight() - 110, size: 12 });
 
-    // Draw the barcode code (CXM-DATE-XXXXX)
-    newPage.drawText(`Barcode: ${contentId}`, {
-      x: 20,  // Align to the upper left
-      y: newPage.getHeight() - 90,
-      size: 12,
-    });
-
-    // Draw the date below the barcode
-    newPage.drawText(`Date: ${today.toLocaleDateString('en-US')}`, {
-      x: 20,  // Align to the upper left
-      y: newPage.getHeight() - 110,
-      size: 12,
-    });
-
-    // Add the barcode name to the list for the summary table
     barcodeList.push(contentId);
   }
 
-  // Create the summary table at the end of the PDF
+  // Create a summary page
   const summaryPage = newPdfDoc.addPage();
   summaryPage.drawText('Summary Table', { x: 50, y: summaryPage.getHeight() - 50, size: 16 });
-
-  // Define table columns: Barcode Name, Completed, Posted
   let yOffset = summaryPage.getHeight() - 80;
-  summaryPage.drawText('Barcode Name', { x: 50, y: yOffset, size: 12 });
-  summaryPage.drawText('Completed', { x: 250, y: yOffset, size: 12 });
-  summaryPage.drawText('Posted', { x: 400, y: yOffset, size: 12 });
 
-  yOffset -= 20;  // Move down for the next row
-
-  // Loop through barcodeList and add to the table
   for (const barcode of barcodeList) {
     summaryPage.drawText(barcode, { x: 50, y: yOffset, size: 12 });
-    summaryPage.drawText('_____________', { x: 250, y: yOffset, size: 12 });  // Completed (blank)
-    summaryPage.drawText('_____________', { x: 400, y: yOffset, size: 12 });  // Posted (blank)
+    summaryPage.drawText('_____________', { x: 250, y: yOffset, size: 12 });
+    summaryPage.drawText('_____________', { x: 400, y: yOffset, size: 12 });
     yOffset -= 20;
   }
 
-  // Save the final combined PDF (uploaded PDF pages + overlay + summary)
-  const outputFileName = `generated_${contentCounter - 1}.pdf`;  // Use the last content counter value for the file name
-  const outputPdfPath = path.join(__dirname, 'uploads', outputFileName);
+  const outputPdfPath = path.join(__dirname, 'uploads', `generated_${contentCounter - 1}.pdf`);
   const outputPdfBytes = await newPdfDoc.save();
-  fs.writeFileSync(outputPdfPath, outputPdfBytes);  // Write the combined PDF to a file
+  fs.writeFileSync(outputPdfPath, outputPdfBytes);
 
-  return outputPdfPath;  // Return the path of the generated PDF
+  return outputPdfPath;
 }
 
-// Function to generate a barcode using bwip-js
+// Function to generate barcode using bwip-js
 async function generateBarcode(contentId) {
   return new Promise((resolve, reject) => {
     bwipjs.toBuffer({
-      bcid: 'code128',   // Barcode type
-      text: contentId,   // The content ID to encode in the barcode
-      scale: 3,          // 3x scaling factor
-      height: 10,        // Bar height, in millimeters
-      includetext: true, // Show human-readable text
-      textxalign: 'center', // Align text to the center
-    }, function (err, png) {
+      bcid: 'code128',
+      text: contentId,
+      scale: 3,
+      height: 10,
+      includetext: true,
+      textxalign: 'center'
+    }, (err, png) => {
       if (err) {
         reject(err);
       } else {
@@ -211,8 +179,3 @@ async function generateBarcode(contentId) {
     });
   });
 }
-
-// Start the server
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-});
